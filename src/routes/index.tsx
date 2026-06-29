@@ -7,42 +7,35 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { supabase } from "@/integrations/supabase/client";
+import { Wifi } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "Invoice Box Sorter" },
-      { name: "description", content: "Scan barcodes to sort arrived invoice boxes against your shipment list." },
+      { name: "description", content: "Scan barcodes to sort arrived invoice boxes against your shipment list. Synced live across every device." },
     ],
   }),
   component: Index,
 });
 
 type Invoice = {
+  id: string;
   invoice: string;
-  weight?: string;
-  place?: string;
-  [k: string]: string | undefined;
+  weight?: string | null;
+  place?: string | null;
 };
 
 type ScanRecord = {
+  id: string;
   invoice: string;
   status: "matched" | "duplicate" | "unknown" | "manual";
-  at: number;
-  weight?: string;
-  place?: string;
+  weight?: string | null;
+  place?: string | null;
+  source: string;
+  created_at: string;
 };
-
-const STORAGE_KEY = "invoice_sorter_v1";
-
-function loadState(): { invoices: Invoice[]; scans: ScanRecord[] } {
-  if (typeof window === "undefined") return { invoices: [], scans: [] };
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {}
-  return { invoices: [], scans: [] };
-}
 
 function Index() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -50,26 +43,54 @@ function Index() {
   const [manualInput, setManualInput] = useState("");
   const [scanning, setScanning] = useState(false);
   const [lastResult, setLastResult] = useState<ScanRecord | null>(null);
+  const [loading, setLoading] = useState(true);
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const lastScanRef = useRef<{ code: string; at: number }>({ code: "", at: 0 });
+  const invoicesRef = useRef<Invoice[]>([]);
+  const scansRef = useRef<ScanRecord[]>([]);
 
+  useEffect(() => { invoicesRef.current = invoices; }, [invoices]);
+  useEffect(() => { scansRef.current = scans; }, [scans]);
+
+  // Initial load + realtime
   useEffect(() => {
-    const s = loadState();
-    setInvoices(s.invoices);
-    setScans(s.scans);
+    let cancelled = false;
+    (async () => {
+      const [inv, sc] = await Promise.all([
+        supabase.from("sorter_invoices").select("*").order("created_at", { ascending: true }),
+        supabase.from("sorter_scans").select("*").order("created_at", { ascending: false }).limit(500),
+      ]);
+      if (cancelled) return;
+      if (inv.data) setInvoices(inv.data as Invoice[]);
+      if (sc.data) setScans(sc.data as ScanRecord[]);
+      setLoading(false);
+    })();
+
+    const ch = supabase
+      .channel("sorter_sync")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "sorter_invoices" },
+        (p) => setInvoices((prev) => prev.some(i => i.id === (p.new as Invoice).id) ? prev : [...prev, p.new as Invoice]))
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "sorter_invoices" },
+        (p) => setInvoices((prev) => prev.filter(i => i.id !== (p.old as Invoice).id)))
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "sorter_scans" },
+        (p) => {
+          const rec = p.new as ScanRecord;
+          setScans((prev) => prev.some(s => s.id === rec.id) ? prev : [rec, ...prev]);
+          setLastResult(rec);
+        })
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "sorter_scans" },
+        (p) => setScans((prev) => prev.filter(s => s.id !== (p.old as ScanRecord).id)))
+      .subscribe();
+
+    return () => { cancelled = true; supabase.removeChannel(ch); };
   }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ invoices, scans }));
-  }, [invoices, scans]);
 
   const handleExcel = async (file: File) => {
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf);
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
-    const parsed: Invoice[] = rows.map((r) => {
+    const parsed = rows.map((r) => {
       const keys = Object.keys(r);
       const find = (...names: string[]) =>
         keys.find((k) => names.some((n) => k.toLowerCase().replace(/[\s_]/g, "").includes(n)));
@@ -78,41 +99,54 @@ function Index() {
       const pKey = find("place", "destination", "delivery", "city", "location", "address");
       return {
         invoice: String(r[invKey] ?? "").trim(),
-        weight: wKey ? String(r[wKey] ?? "").trim() : undefined,
-        place: pKey ? String(r[pKey] ?? "").trim() : undefined,
+        weight: wKey ? String(r[wKey] ?? "").trim() : null,
+        place: pKey ? String(r[pKey] ?? "").trim() : null,
       };
     }).filter((r) => r.invoice);
-    setInvoices(parsed);
-    setScans([]);
-    toast.success(`Loaded ${parsed.length} invoices`);
+
+    if (!parsed.length) { toast.error("No invoices found in file"); return; }
+
+    // Replace shared list
+    await supabase.from("sorter_scans").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    await supabase.from("sorter_invoices").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    const { error } = await supabase.from("sorter_invoices").insert(parsed);
+    if (error) { toast.error("Upload failed: " + error.message); return; }
+    toast.success(`Loaded ${parsed.length} invoices for everyone`);
   };
 
-  const processCode = (raw: string, source: "scan" | "manual") => {
+  const processCode = async (raw: string, source: "scan" | "manual") => {
     const code = raw.trim();
     if (!code) return;
     const now = Date.now();
     if (source === "scan" && lastScanRef.current.code === code && now - lastScanRef.current.at < 1500) return;
     lastScanRef.current = { code, at: now };
 
-    const match = invoices.find((i) => i.invoice.toLowerCase() === code.toLowerCase());
-    const already = scans.find((s) => s.invoice.toLowerCase() === code.toLowerCase() && (s.status === "matched" || s.status === "manual"));
+    const match = invoicesRef.current.find((i) => i.invoice.toLowerCase() === code.toLowerCase());
+    const already = scansRef.current.find((s) => s.invoice.toLowerCase() === code.toLowerCase() && (s.status === "matched" || s.status === "manual"));
 
-    let rec: ScanRecord;
+    let status: ScanRecord["status"];
     if (already) {
-      rec = { invoice: code, status: "duplicate", at: now, weight: match?.weight, place: match?.place };
+      status = "duplicate";
       toast.error(`Duplicate: ${code}`);
       if (navigator.vibrate) navigator.vibrate([100, 60, 100, 60, 200]);
     } else if (match) {
-      rec = { invoice: code, status: source === "manual" ? "manual" : "matched", at: now, weight: match.weight, place: match.place };
+      status = source === "manual" ? "manual" : "matched";
       toast.success(`Matched: ${code}`);
       if (navigator.vibrate) navigator.vibrate(80);
     } else {
-      rec = { invoice: code, status: "unknown", at: now };
+      status = "unknown";
       toast.warning(`Not in list: ${code}`);
       if (navigator.vibrate) navigator.vibrate([200, 80, 200]);
     }
-    setLastResult(rec);
-    setScans((prev) => [rec, ...prev]);
+
+    const { error } = await supabase.from("sorter_scans").insert({
+      invoice: code,
+      status,
+      weight: match?.weight ?? null,
+      place: match?.place ?? null,
+      source,
+    });
+    if (error) toast.error(error.message);
   };
 
   const startScan = async () => {
@@ -126,7 +160,7 @@ function Index() {
       await scanner.start(
         { facingMode: "environment" },
         { fps: 10, qrbox: { width: 280, height: 160 } },
-        (decoded) => processCode(decoded, "scan"),
+        (decoded) => { void processCode(decoded, "scan"); },
         () => {},
       );
     } catch (e) {
@@ -136,10 +170,7 @@ function Index() {
   };
 
   const stopScan = async () => {
-    try {
-      await scannerRef.current?.stop();
-      await scannerRef.current?.clear();
-    } catch {}
+    try { await scannerRef.current?.stop(); await scannerRef.current?.clear(); } catch {}
     scannerRef.current = null;
     setScanning(false);
   };
@@ -154,17 +185,26 @@ function Index() {
         Weight: inv.weight ?? "",
         Place: inv.place ?? "",
         Status: scan ? "Received" : "Pending",
-        ScannedAt: scan ? new Date(scan.at).toLocaleString() : "",
+        ScannedAt: scan ? new Date(scan.created_at).toLocaleString() : "",
         Method: scan?.status === "manual" ? "Manual" : scan ? "Scan" : "",
       };
     });
     const extras = scans.filter((s) => s.status === "unknown").map((s) => ({
-      Invoice: s.invoice, Weight: "", Place: "", Status: "Unknown", ScannedAt: new Date(s.at).toLocaleString(), Method: "Scan",
+      Invoice: s.invoice, Weight: "", Place: "", Status: "Unknown",
+      ScannedAt: new Date(s.created_at).toLocaleString(), Method: "Scan",
     }));
     const ws = XLSX.utils.json_to_sheet([...rows, ...extras]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Sorting");
     XLSX.writeFile(wb, `sorting-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
+
+  const resetAll = async () => {
+    if (!confirm("Reset shipment list and scans for EVERYONE?")) return;
+    await supabase.from("sorter_scans").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    await supabase.from("sorter_invoices").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    setLastResult(null);
+    toast.success("Reset");
   };
 
   const receivedCount = invoices.filter((inv) =>
@@ -178,15 +218,22 @@ function Index() {
     <div className="min-h-screen bg-background pb-24">
       <Toaster position="top-center" richColors />
       <header className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur px-4 py-3">
-        <h1 className="text-lg font-semibold">Invoice Box Sorter</h1>
-        <p className="text-xs text-muted-foreground">Scan arrived boxes against your shipment list</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-semibold">Invoice Box Sorter</h1>
+            <p className="text-xs text-muted-foreground">Shared live across all devices</p>
+          </div>
+          <span className="inline-flex items-center gap-1 text-xs text-green-600">
+            <Wifi className="size-3" /> Live
+          </span>
+        </div>
       </header>
 
       <div className="px-4 py-4 space-y-4 max-w-xl mx-auto">
-        {invoices.length === 0 && (
+        {!loading && invoices.length === 0 && (
           <Card className="p-4 space-y-3">
-            <h2 className="font-medium">1. Load shipment Excel</h2>
-            <p className="text-xs text-muted-foreground">Columns: Invoice, Weight, Place (any order, any case).</p>
+            <h2 className="font-medium">1. Load shipment Excel (shared)</h2>
+            <p className="text-xs text-muted-foreground">Columns: Invoice, Weight, Place. Everyone will see this list.</p>
             <Input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => e.target.files?.[0] && handleExcel(e.target.files[0])} />
           </Card>
         )}
@@ -194,22 +241,10 @@ function Index() {
         {invoices.length > 0 && (
           <>
             <div className="grid grid-cols-4 gap-2">
-              <Card className="p-2 text-center">
-                <div className="text-xl font-bold">{receivedCount}</div>
-                <div className="text-[10px] uppercase text-muted-foreground">Received</div>
-              </Card>
-              <Card className="p-2 text-center">
-                <div className="text-xl font-bold">{pendingCount}</div>
-                <div className="text-[10px] uppercase text-muted-foreground">Pending</div>
-              </Card>
-              <Card className="p-2 text-center">
-                <div className="text-xl font-bold text-destructive">{duplicates}</div>
-                <div className="text-[10px] uppercase text-muted-foreground">Dupes</div>
-              </Card>
-              <Card className="p-2 text-center">
-                <div className="text-xl font-bold text-amber-600">{unknowns}</div>
-                <div className="text-[10px] uppercase text-muted-foreground">Unknown</div>
-              </Card>
+              <Card className="p-2 text-center"><div className="text-xl font-bold">{receivedCount}</div><div className="text-[10px] uppercase text-muted-foreground">Received</div></Card>
+              <Card className="p-2 text-center"><div className="text-xl font-bold">{pendingCount}</div><div className="text-[10px] uppercase text-muted-foreground">Pending</div></Card>
+              <Card className="p-2 text-center"><div className="text-xl font-bold text-destructive">{duplicates}</div><div className="text-[10px] uppercase text-muted-foreground">Dupes</div></Card>
+              <Card className="p-2 text-center"><div className="text-xl font-bold text-amber-600">{unknowns}</div><div className="text-[10px] uppercase text-muted-foreground">Unknown</div></Card>
             </div>
 
             <Card className="p-3 space-y-3">
@@ -228,14 +263,14 @@ function Index() {
                   onChange={(e) => setManualInput(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && manualInput.trim()) {
-                      processCode(manualInput, "manual");
+                      void processCode(manualInput, "manual");
                       setManualInput("");
                     }
                   }}
                 />
                 <Button
                   variant="secondary"
-                  onClick={() => { if (manualInput.trim()) { processCode(manualInput, "manual"); setManualInput(""); } }}
+                  onClick={() => { if (manualInput.trim()) { void processCode(manualInput, "manual"); setManualInput(""); } }}
                 >Mark</Button>
               </div>
             </Card>
@@ -257,18 +292,8 @@ function Index() {
                 </div>
                 {(lastResult.weight || lastResult.place) && (
                   <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                    {lastResult.weight && (
-                      <div>
-                        <div className="text-xs text-muted-foreground">Weight</div>
-                        <div className="font-medium">{lastResult.weight}</div>
-                      </div>
-                    )}
-                    {lastResult.place && (
-                      <div>
-                        <div className="text-xs text-muted-foreground">Place</div>
-                        <div className="font-medium">{lastResult.place}</div>
-                      </div>
-                    )}
+                    {lastResult.weight && (<div><div className="text-xs text-muted-foreground">Weight</div><div className="font-medium">{lastResult.weight}</div></div>)}
+                    {lastResult.place && (<div><div className="text-xs text-muted-foreground">Place</div><div className="font-medium">{lastResult.place}</div></div>)}
                   </div>
                 )}
               </Card>
@@ -279,13 +304,13 @@ function Index() {
                 <h3 className="font-medium text-sm">Scan history ({scans.length})</h3>
                 <div className="flex gap-2">
                   <Button size="sm" variant="outline" onClick={exportResults}>Export</Button>
-                  <Button size="sm" variant="ghost" onClick={() => { if (confirm("Reset everything?")) { setInvoices([]); setScans([]); setLastResult(null); } }}>Reset</Button>
+                  <Button size="sm" variant="ghost" onClick={resetAll}>Reset</Button>
                 </div>
               </div>
               <div className="max-h-80 overflow-y-auto divide-y">
                 {scans.length === 0 && <p className="text-xs text-muted-foreground py-2">No scans yet.</p>}
-                {scans.map((s, i) => (
-                  <div key={i} className="py-2 flex items-center justify-between gap-2 text-sm">
+                {scans.map((s) => (
+                  <div key={s.id} className="py-2 flex items-center justify-between gap-2 text-sm">
                     <div className="min-w-0">
                       <div className="font-medium truncate">{s.invoice}</div>
                       <div className="text-xs text-muted-foreground truncate">

@@ -38,6 +38,60 @@ export type Database = {
         }
         Relationships: []
       }
+      sorter_invoices: {
+        Row: {
+          created_at: string
+          id: string
+          invoice: string
+          place: string | null
+          weight: string | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          invoice: string
+          place?: string | null
+          weight?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          invoice?: string
+          place?: string | null
+          weight?: string | null
+        }
+        Relationships: []
+      }
+      sorter_scans: {
+        Row: {
+          created_at: string
+          id: string
+          invoice: string
+          place: string | null
+          source: string
+          status: string
+          weight: string | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          invoice: string
+          place?: string | null
+          source?: string
+          status: string
+          weight?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          invoice?: string
+          place?: string | null
+          source?: string
+          status?: string
+          weight?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
