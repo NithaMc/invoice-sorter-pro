@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
-import { Wifi, Search, Trash2, Check, X } from "lucide-react";
+import { Wifi, Search, Trash2, Check, X, Undo2 } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   head: () => ({
