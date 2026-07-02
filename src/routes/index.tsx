@@ -44,6 +44,16 @@ function Index() {
   const [scanning, setScanning] = useState(false);
   const [lastResult, setLastResult] = useState<ScanRecord | null>(null);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<"all" | "received" | "pending" | "duplicate" | "unknown" | "verify">("all");
+  const [search, setSearch] = useState("");
+  const [verified, setVerified] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try { return new Set(JSON.parse(localStorage.getItem("verifiedScans") || "[]")); } catch { return new Set(); }
+  });
+  const saveVerified = (next: Set<string>) => {
+    setVerified(new Set(next));
+    if (typeof window !== "undefined") localStorage.setItem("verifiedScans", JSON.stringify([...next]));
+  };
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const lastScanRef = useRef<{ code: string; at: number }>({ code: "", at: 0 });
   const invoicesRef = useRef<Invoice[]>([]);
