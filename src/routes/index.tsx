@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { Html5Qrcode } from "html5-qrcode";
 import { Toaster, toast } from "sonner";
@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
-import { Wifi } from "lucide-react";
+import { Wifi, Search, Trash2, Check, X } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   head: () => ({
