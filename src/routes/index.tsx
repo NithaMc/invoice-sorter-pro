@@ -403,6 +403,7 @@ function Index() {
                 {tabRows.map((r) => {
                   const canDelete = r.status === "duplicate" || r.status === "unknown" || tab === "verify";
                   const showVerify = tab === "verify" && r.scanId;
+                  const canMoveToPending = r.status === "received" && r.scanId;
                   return (
                     <div key={r.key} className="py-2 flex items-center justify-between gap-2 text-sm">
                       <div className="min-w-0 flex-1">
@@ -425,9 +426,27 @@ function Index() {
                             <Check className="size-3.5" />
                           </Button>
                         )}
+                        {canMoveToPending && (
+                          <Button
+                            size="icon"
+                            variant="outline"
+                            className="h-7 w-7"
+                            title="Recheck — move back to Pending"
+                            onClick={async () => {
+                              if (!confirm(`Move ${r.invoice} back to Pending for recheck?`)) return;
+                              const next = new Set(verified);
+                              if (next.delete(r.scanId!)) saveVerified(next);
+                              await deleteScan(r.scanId!);
+                              if (lastResult?.id === r.scanId) setLastResult(null);
+                            }}
+                          >
+                            <Undo2 className="size-3.5 text-amber-600" />
+                          </Button>
+                        )}
                         {canDelete && r.scanId && (
                           <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => void deleteScan(r.scanId!)} title="Delete">
                             <Trash2 className="size-3.5 text-destructive" />
+
                           </Button>
                         )}
                       </div>
