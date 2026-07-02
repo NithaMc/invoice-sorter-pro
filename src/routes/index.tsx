@@ -224,6 +224,50 @@ function Index() {
   const duplicates = scans.filter((s) => s.status === "duplicate").length;
   const unknowns = scans.filter((s) => s.status === "unknown").length;
 
+  const deleteScan = async (id: string) => {
+    const { error } = await supabase.from("sorter_scans").delete().eq("id", id);
+    if (error) toast.error(error.message); else toast.success("Deleted");
+  };
+
+  const toggleVerify = (id: string) => {
+    const next = new Set(verified);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    saveVerified(next);
+  };
+
+  const q = search.trim().toLowerCase();
+  const tabRows = useMemo(() => {
+    type Row = { key: string; invoice: string; weight?: string | null; place?: string | null; status: string; scanId?: string; verified?: boolean };
+    let rows: Row[] = [];
+    const receivedScans = scans.filter((s) => s.status === "matched" || s.status === "manual");
+    if (tab === "all") {
+      rows = invoices.map((inv) => {
+        const sc = receivedScans.find((s) => s.invoice.toLowerCase() === inv.invoice.toLowerCase());
+        return { key: inv.id, invoice: inv.invoice, weight: inv.weight, place: inv.place, status: sc ? "received" : "pending", scanId: sc?.id, verified: sc ? verified.has(sc.id) : undefined };
+      });
+    } else if (tab === "received") {
+      rows = invoices
+        .map((inv) => {
+          const sc = receivedScans.find((s) => s.invoice.toLowerCase() === inv.invoice.toLowerCase());
+          return sc ? { key: inv.id, invoice: inv.invoice, weight: inv.weight, place: inv.place, status: "received", scanId: sc.id, verified: verified.has(sc.id) } : null;
+        })
+        .filter(Boolean) as Row[];
+    } else if (tab === "pending") {
+      rows = invoices
+        .filter((inv) => !receivedScans.some((s) => s.invoice.toLowerCase() === inv.invoice.toLowerCase()))
+        .map((inv) => ({ key: inv.id, invoice: inv.invoice, weight: inv.weight, place: inv.place, status: "pending" }));
+    } else if (tab === "duplicate") {
+      rows = scans.filter((s) => s.status === "duplicate").map((s) => ({ key: s.id, invoice: s.invoice, weight: s.weight, place: s.place, status: "duplicate", scanId: s.id }));
+    } else if (tab === "unknown") {
+      rows = scans.filter((s) => s.status === "unknown").map((s) => ({ key: s.id, invoice: s.invoice, weight: s.weight, place: s.place, status: "unknown", scanId: s.id }));
+    } else if (tab === "verify") {
+      rows = receivedScans.map((s) => ({ key: s.id, invoice: s.invoice, weight: s.weight, place: s.place, status: "received", scanId: s.id, verified: verified.has(s.id) }));
+    }
+    if (q) rows = rows.filter((r) => r.invoice.toLowerCase().includes(q) || (r.place || "").toLowerCase().includes(q));
+    return rows;
+  }, [tab, invoices, scans, verified, q]);
+
+
   return (
     <div className="min-h-screen bg-background pb-24">
       <Toaster position="top-center" richColors />
