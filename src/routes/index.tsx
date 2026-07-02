@@ -294,11 +294,23 @@ function Index() {
 
         {invoices.length > 0 && (
           <>
-            <div className="grid grid-cols-4 gap-2">
-              <Card className="p-2 text-center"><div className="text-xl font-bold">{receivedCount}</div><div className="text-[10px] uppercase text-muted-foreground">Received</div></Card>
-              <Card className="p-2 text-center"><div className="text-xl font-bold">{pendingCount}</div><div className="text-[10px] uppercase text-muted-foreground">Pending</div></Card>
-              <Card className="p-2 text-center"><div className="text-xl font-bold text-destructive">{duplicates}</div><div className="text-[10px] uppercase text-muted-foreground">Dupes</div></Card>
-              <Card className="p-2 text-center"><div className="text-xl font-bold text-amber-600">{unknowns}</div><div className="text-[10px] uppercase text-muted-foreground">Unknown</div></Card>
+            <div className="grid grid-cols-5 gap-1.5">
+              {([
+                ["all", "All", invoices.length, ""],
+                ["received", "Received", receivedCount, "text-green-600"],
+                ["pending", "Pending", pendingCount, ""],
+                ["duplicate", "Dupes", duplicates, "text-destructive"],
+                ["unknown", "Unknown", unknowns, "text-amber-600"],
+              ] as const).map(([k, label, count, cls]) => (
+                <button
+                  key={k}
+                  onClick={() => setTab(k)}
+                  className={`rounded-lg border p-2 text-center transition ${tab === k ? "border-primary bg-primary/10" : "bg-card hover:bg-accent"}`}
+                >
+                  <div className={`text-lg font-bold ${cls}`}>{count}</div>
+                  <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
+                </button>
+              ))}
             </div>
 
             <Card className="p-3 space-y-3">
