@@ -362,33 +362,78 @@ function Index() {
                     {lastResult.place && (<div><div className="text-xs text-muted-foreground">Place</div><div className="font-medium">{lastResult.place}</div></div>)}
                   </div>
                 )}
+                {(lastResult.status === "matched" || lastResult.status === "manual") && (
+                  <div className="mt-3 flex gap-2">
+                    <Button
+                      size="sm"
+                      variant={verified.has(lastResult.id) ? "secondary" : "default"}
+                      className="flex-1"
+                      onClick={() => toggleVerify(lastResult.id)}
+                    >
+                      <Check className="size-4" /> {verified.has(lastResult.id) ? "Verified ✓" : "OK"}
+                    </Button>
+                    <Button size="sm" variant="destructive" className="flex-1" onClick={() => { void deleteScan(lastResult.id); setLastResult(null); }}>
+                      <X className="size-4" /> Not OK
+                    </Button>
+                  </div>
+                )}
               </Card>
             )}
 
-            <Card className="p-3 space-y-2">
-              <div className="flex items-center justify-between">
-                <h3 className="font-medium text-sm">Scan history ({scans.length})</h3>
+            <Card className="p-3 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-medium text-sm capitalize">{tab} ({tabRows.length})</h3>
                 <div className="flex gap-2">
+                  <Button size="sm" variant={tab === "verify" ? "default" : "outline"} onClick={() => setTab("verify")}>Verify</Button>
                   <Button size="sm" variant="outline" onClick={exportResults}>Export</Button>
                   <Button size="sm" variant="ghost" onClick={resetAll}>Reset</Button>
                 </div>
               </div>
-              <div className="max-h-80 overflow-y-auto divide-y">
-                {scans.length === 0 && <p className="text-xs text-muted-foreground py-2">No scans yet.</p>}
-                {scans.map((s) => (
-                  <div key={s.id} className="py-2 flex items-center justify-between gap-2 text-sm">
-                    <div className="min-w-0">
-                      <div className="font-medium truncate">{s.invoice}</div>
-                      <div className="text-xs text-muted-foreground truncate">
-                        {s.place || "—"}{s.weight ? ` · ${s.weight}` : ""}
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+                <Input
+                  className="pl-8"
+                  placeholder="Search invoice # or place…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+              <div className="max-h-96 overflow-y-auto divide-y">
+                {tabRows.length === 0 && <p className="text-xs text-muted-foreground py-2">Nothing to show.</p>}
+                {tabRows.map((r) => {
+                  const canDelete = r.status === "duplicate" || r.status === "unknown" || tab === "verify";
+                  const showVerify = tab === "verify" && r.scanId;
+                  return (
+                    <div key={r.key} className="py-2 flex items-center justify-between gap-2 text-sm">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium truncate flex items-center gap-2">
+                          {r.invoice}
+                          {r.verified && <Check className="size-3 text-green-600 shrink-0" />}
+                        </div>
+                        <div className="text-xs text-muted-foreground truncate">
+                          {r.place || "—"}{r.weight ? ` · ${r.weight}` : ""}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Badge variant={
+                          r.status === "duplicate" ? "destructive" :
+                          r.status === "unknown" ? "outline" :
+                          r.status === "pending" ? "secondary" : "default"
+                        }>{r.status}</Badge>
+                        {showVerify && r.scanId && (
+                          <Button size="icon" variant={r.verified ? "secondary" : "outline"} className="h-7 w-7" onClick={() => toggleVerify(r.scanId!)} title="Mark verified">
+                            <Check className="size-3.5" />
+                          </Button>
+                        )}
+                        {canDelete && r.scanId && (
+                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => void deleteScan(r.scanId!)} title="Delete">
+                            <Trash2 className="size-3.5 text-destructive" />
+                          </Button>
+                        )}
                       </div>
                     </div>
-                    <Badge variant={
-                      s.status === "duplicate" ? "destructive" :
-                      s.status === "unknown" ? "outline" : "secondary"
-                    }>{s.status}</Badge>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </Card>
           </>
